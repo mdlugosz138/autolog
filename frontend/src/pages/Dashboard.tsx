@@ -3,10 +3,15 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getCars, createCar, deleteCar, decodeVin, type Car } from '../api/cars';
 
+function getErrorMessage(err: any, fallback: string): string {
+  return err?.response?.data?.message || fallback;
+}
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [cars, setCars] = useState<Car[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [showForm, setShowForm] = useState(false);
 
   const [vin, setVin] = useState('');
@@ -17,6 +22,8 @@ export default function Dashboard() {
   const [model, setModel] = useState('');
   const [year, setYear] = useState('');
   const [mileage, setMileage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
 
   useEffect(() => {
     loadCars();
@@ -24,9 +31,15 @@ export default function Dashboard() {
 
   async function loadCars() {
     setLoading(true);
-    const data = await getCars();
-    setCars(data);
-    setLoading(false);
+    setLoadError('');
+    try {
+      const data = await getCars();
+      setCars(data);
+    } catch (err) {
+      setLoadError(getErrorMessage(err, 'Nie udało się załadować listy samochodów.'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleDecodeVin() {
@@ -41,8 +54,8 @@ export default function Dashboard() {
       setMake(decoded.make);
       setModel(decoded.model);
       if (decoded.year) setYear(String(decoded.year));
-    } catch (err: any) {
-      setVinError(err.response?.data?.message || 'Nie udało się rozpoznać auta po VIN');
+    } catch (err) {
+      setVinError(getErrorMessage(err, 'Nie udało się rozpoznać auta po VIN'));
     } finally {
       setVinLoading(false);
     }
@@ -50,21 +63,41 @@ export default function Dashboard() {
 
   async function handleAddCar(e: React.FormEvent) {
     e.preventDefault();
-    await createCar({
-      make,
-      model,
-      year: Number(year),
-      currentMileage: Number(mileage),
-      vin: vin || undefined,
-    });
-    setVin('');
-    setMake('');
-    setModel('');
-    setYear('');
-    setMileage('');
-    setVinError('');
-    setShowForm(false);
-    loadCars();
+    setFormError('');
+
+    const yearNum = Number(year);
+    const currentYear = new Date().getFullYear();
+    if (yearNum < 1900 || yearNum > currentYear + 1) {
+      setFormError(`Rok produkcji musi być między 1900 a ${currentYear + 1}.`);
+      return;
+    }
+    if (Number(mileage) < 0) {
+      setFormError('Przebieg nie może być ujemny.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await createCar({
+        make,
+        model,
+        year: yearNum,
+        currentMileage: Number(mileage),
+        vin: vin || undefined,
+      });
+      setVin('');
+      setMake('');
+      setModel('');
+      setYear('');
+      setMileage('');
+      setVinError('');
+      setShowForm(false);
+      await loadCars();
+    } catch (err) {
+      setFormError(getErrorMessage(err, 'Nie udało się dodać samochodu.'));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -82,7 +115,10 @@ export default function Dashboard() {
       </div>
 
       <button
-        onClick={() => setShowForm(!showForm)}
+        onClick={() => {
+          setShowForm(!showForm);
+          setFormError('');
+        }}
         className="mb-6 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
       >
         {showForm ? 'Anuluj' : '+ Dodaj samochód'}
@@ -90,6 +126,12 @@ export default function Dashboard() {
 
       {showForm && (
         <form onSubmit={handleAddCar} className="bg-white p-6 rounded-lg shadow mb-6 max-w-md">
+          {formError && (
+            <p className="text-red-500 text-sm mb-3 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {formError}
+            </p>
+          )}
+
           <label className="text-sm text-gray-600">VIN (opcjonalnie — rozpozna auto automatycznie)</label>
           <div className="flex gap-2 mb-1">
             <input
@@ -132,14 +174,25 @@ export default function Dashboard() {
             onChange={(e) => setMileage(e.target.value)}
             className="w-full border rounded px-3 py-2 mb-3" required
           />
-          <button type="submit" className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700">
-            Zapisz
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 disabled:opacity-50"
+          >
+            {saving ? 'Zapisywanie...' : 'Zapisz'}
           </button>
         </form>
       )}
 
       {loading ? (
-        <p>Ładowanie...</p>
+        <p className="text-gray-500">Ładowanie...</p>
+      ) : loadError ? (
+        <div>
+          <p className="text-red-500 mb-2">{loadError}</p>
+          <button onClick={loadCars} className="text-blue-600 hover:underline text-sm">
+            Spróbuj ponownie
+          </button>
+        </div>
       ) : cars.length === 0 ? (
         <p className="text-gray-500">Nie masz jeszcze żadnego samochodu. Dodaj pierwszy!</p>
       ) : (
